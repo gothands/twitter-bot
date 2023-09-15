@@ -5,7 +5,7 @@ import time
 import re
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from events import SessionEventListener
+from events import SessionEventListener, GameEventListener
 
 load_dotenv()
 
@@ -28,6 +28,7 @@ client = tweepy.Client(
 session_mapping = {}
 game_mapping = {}
 address_mapping = {}
+game_tweet_mapping = {}
 
 def generate_session_id():
     return random.randint(100000, 999999)
@@ -69,12 +70,32 @@ def get_challenge_recipient(status):
     # If no recipient is found, return None
     return None
 
+#default to address if no twitter handle is found in the mappings
+def get_twitter_handle_from_address(address):
+    if address in address_mapping:
+        sessionId = address_mapping[address]
+        if sessionId in session_mapping:
+            return session_mapping[sessionId]
+    return address
+
 # Event listener callback function
 def on_session(session_id, user_address):
     # Store the mapping
-    address_mapping[session_id] = user_address
+    address_mapping[user_address] = session_id
     #log
-    print(f"Session {session_id} created for {user_address}")    
+    print(f"Session {session_id} created for {user_address}")  
+
+def on_game_start(game_id, addressA, addressB):
+    #log
+    print(f"Game {game_id} started for {addressA} and {addressB}")
+    # Tweet mentioning both participants and guiding them to check their DMs with @handsy_io
+    client.create_tweet(status=f"@{get_twitter_handle_from_address(addressA)} @{get_twitter_handle_from_address(addressB)} Game started! Please check your DMs with @handsy_io for the game link.", in_reply_to_status_id=game_tweet_mapping[game_id])
+
+def on_game_end(game_id, addressA, addressB, winner):
+    #log
+    print(f"Game {game_id} ended for {addressA} and {addressB} with result {winner}")
+    # Tweet mentioning both participants and guiding them to check their DMs with @handsy_io
+    client.create_tweet(status=f"@{get_twitter_handle_from_address(addressA)} @{get_twitter_handle_from_address(addressB)} Game ended! Winner is {get_twitter_handle_from_address(winner)}.", in_reply_to_status_id=game_tweet_mapping[game_id])
 
 def on_status(status):
     text = status.text.lower()
@@ -87,12 +108,9 @@ def on_status(status):
             if is_following(user):
                 recipient = get_challenge_recipient(status)
                 
-                # Check if recipient is following
-                if is_following(recipient):
-                    # Ask the recipient to reply with "accept" or "decline"
-                    client.create_tweet(status=f"@{recipient} Do you accept the challenge for {bet_amount}? Reply with 'accept' or 'decline'.", in_reply_to_status_id=status.id)
-                else:
-                    client.create_tweet(status=f"@{recipient} Please follow @handsy_io first and then reply to the challenge.", in_reply_to_status_id=status.id)
+                # Ask the recipient to reply with "accept" or "decline"
+                client.create_tweet(status=f"@{recipient} Do you accept the challenge for {bet_amount}? Reply with 'accept' or 'decline'. Make sure to follow @handsy_io before replying.", in_reply_to_status_id=status.id)
+                    #client.create_tweet(status=f"@{recipient} Please follow @handsy_io first and then reply to the challenge.", in_reply_to_status_id=status.id)
             else:
                 client.create_tweet(status=f"@{user} Please follow @handsy_io first to trigger matches. [Link to follow](https://twitter.com/handsy_io)", in_reply_to_status_id=status.id)
 
@@ -117,6 +135,7 @@ def on_status(status):
                     game_mapping[challenger_session_id] = game_id
                     game_mapping[recipient_session_id] = game_id
 
+
                     # Send game and session IDs to both challenger and recipient
                     challenger_link = f"https://handsy.io?joinGame={game_id}&sessionId={challenger_session_id}&betAmount={bet_amount}"
                     recipient_link = f"https://handsy.io?joinGame={game_id}&sessionId={recipient_session_id}&betAmount={bet_amount}"
@@ -125,14 +144,16 @@ def on_status(status):
                     client.send_direct_message(recipient_id=recipient, text=recipient_link)
                     
                     # Tweet mentioning both participants and guiding them to check their DMs with @handsy_io
-                    client.create_tweet(status=f"@{challenger} @{user} Challenge accepted! Please check your DMs with @handsy_io for the game link.", in_reply_to_status_id=status.id)
+                    created_tweet = client.create_tweet(status=f"@{challenger} @{user} Challenge accepted! Please check your DMs with @handsy_io for the game link.", in_reply_to_status_id=status.id)
+                    game_tweet_mapping[game_id] = created_tweet.id
                 else:
                     client.create_tweet(status=f"@{user} Error processing the challenge. Please try again.", in_reply_to_status_id=status.id)
             else:
                 client.create_tweet(status=f"@{user} Try again but follow @handsy_io first.", in_reply_to_status_id=status.id)
 
-# Create event listener
+# Create event listeners
 session_listener = SessionEventListener()
+game_listener = GameEventListener()
 
 # Start polling
 last_fetch_time = datetime.now() - timedelta(minutes=1)  # Start from 1 minute ago
@@ -141,6 +162,15 @@ while True:
     events = session_listener.fetch_recent_events()
     for event in events:
         session_listener.handle_event(event, on_session)
+
+    #fetch and handle relevant game events
+    events = game_listener.fetch_recent_game_start_events()
+    for event in events:
+        game_listener.handle_event(event, on_game_start)
+    
+    events = game_listener.fetch_recent_game_end_events()
+    for event in events:
+        game_listener.handle_event(event, on_game_end)
 
     #fetch and handle relevant tweets
     tweets = client.search_recent_tweets(query="@handsy_io challenge OR @handsy_io accept", start_time=last_fetch_time.isoformat())
