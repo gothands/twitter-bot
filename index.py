@@ -135,7 +135,6 @@ def on_status(status):
                     game_mapping[challenger_session_id] = game_id
                     game_mapping[recipient_session_id] = game_id
 
-
                     # Send game and session IDs to both challenger and recipient
                     challenger_link = f"https://handsy.io?joinGame={game_id}&sessionId={challenger_session_id}&betAmount={bet_amount}"
                     recipient_link = f"https://handsy.io?joinGame={game_id}&sessionId={recipient_session_id}&betAmount={bet_amount}"
